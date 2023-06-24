@@ -1,0 +1,7 @@
+git+https://github.com/huggingface/peft.git
+datasets
+loralib
+tensorboard
+einops
+accelerate
+bitsandbytes
