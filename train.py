@@ -104,6 +104,15 @@ def collate_fn(list_of_samples):
         - "chosen" : the chosen text
         - "rejected" : the rejected text
     """
+
+    # for every element replace Human: with >>QUESTION<<
+    # and replace Assistant: with >>ANSWER<<
+    for sample in list_of_samples:
+        sample["chosen"] = sample["chosen"].replace("Human:", ">>QUESTION<<")
+        sample["chosen"] = sample["chosen"].replace("Assistant:", ">>ANSWER<<")
+        sample["rejected"] = sample["rejected"].replace("Human:", ">>QUESTION<<")
+        sample["rejected"] = sample["rejected"].replace("Assistant:", ">>ANSWER<<")
+
     # we tokenize the chosen and rejected text for every sample
     chosen_tokenized = [
         tokenizer(sample["chosen"], padding=False, truncation=False)
