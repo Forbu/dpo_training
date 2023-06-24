@@ -220,8 +220,8 @@ class DPOTrainer(Trainer):
         loss = -F.logsigmoid(self.beta * (pi_logratios - ref_logratios))
         loss = loss.mean()
 
-        chosen_rewards = self.beta * (pos_logprob).detach()
-        rejected_rewards = self.beta * (neg_logprob).detach()
+        chosen_rewards = self.beta * (pos_logprob.squeeze(-1).sum(-1)).detach()
+        rejected_rewards = self.beta * (neg_logprob.squeeze(-1).sum(-1)).detach()
 
         # log the chosen and rejected rewards
         # log only when step is a multiple of 100
