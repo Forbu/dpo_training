@@ -202,6 +202,8 @@ class DPOTrainer(Trainer):
         # self.model_ref.to(self.device_ref)
         # self.model_ref.eval()
 
+        self.loss_mask = True
+
     # we need to define the compute_loss function
     def compute_loss(self, model, inputs, return_outputs=False):
         """
@@ -262,14 +264,22 @@ class DPOTrainer(Trainer):
             # neg_logprob_ref = torch.gather(
             #     neg_logprob_ref, 2, labels_rejected.unsqueeze(-1)
             # )
-            ref_logratios = pos_logprob_ref.squeeze(-1).sum(
-                -1
-            ) - neg_logprob_ref.squeeze(-1).sum(-1)
+
+        if self.loss_mask:
+            pos_logprob_ref = pos_logprob_ref * chosen_loss_mask.unsqueeze(-1)
+            neg_logprob_ref = neg_logprob_ref * rejected_loss_mask.unsqueeze(-1)
+
+            pos_logprob = pos_logprob * chosen_loss_mask.unsqueeze(-1)
+            neg_logprob = neg_logprob * rejected_loss_mask.unsqueeze(-1)
+
+        ref_logratios = pos_logprob_ref.squeeze(-1).sum(-1) - neg_logprob_ref.squeeze(
+            -1
+        ).sum(-1)
 
         # compute loss and reward
         pi_logratios = pos_logprob.squeeze(-1).sum(-1) - neg_logprob.squeeze(-1).sum(-1)
 
-        loss = -F.logsigmoid(self.beta * (pi_logratios - ref_logratios))
+        loss = -F.logsigmoid(self.beta * (pi_logratios - ref_logratios.detach()))
         loss = loss.mean()
 
         chosen_rewards = (
@@ -325,10 +335,11 @@ training_args = TrainingArguments(
     save_steps=10_000,
     save_total_limit=2,
     prediction_loss_only=True,
-    logging_dir="./hh-rlhf/logs_8",
+    logging_dir="./hh-rlhf/logs_9",
     dataloader_num_workers=4,
     run_name="hh-rlhf_3",
     logging_steps=100,
+    learning_rate=5e-6,
     bf16=True,
 )
 
