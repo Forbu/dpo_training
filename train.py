@@ -18,6 +18,8 @@ from transformers import AutoModelForCausalLM, Trainer, TrainingArguments
 
 from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
 
+from transformers import BitsAndBytesConfig
+
 dataset_name = "Anthropic/hh-rlhf"
 model_name = "tiiuae/falcon-7b-instruct"
 
@@ -42,9 +44,24 @@ model = AutoModelForCausalLM.from_pretrained(
     device_map={"": 0},
     trust_remote_code=True,
 )
-# model_ref = AutoModelForCausalLM.from_pretrained(model_name, cache_dir="./cache_models")
-# model_ref.eval()
-model_ref = 0
+
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16,
+)
+
+model_ref = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    cache_dir="./cache_models_4b",
+    quantization_config=bnb_config,
+    device_map={"": 0},
+    trust_remote_code=True,
+)
+
+model_ref.eval()
+# model_ref = 0
 
 from peft import prepare_model_for_kbit_training
 
@@ -197,31 +214,50 @@ class DPOTrainer(Trainer):
         neg_logprob = torch.gather(neg_logprob, 2, labels_rejected.unsqueeze(-1))
 
         # we need to compute the logprob of the reference examples
-        # with torch.no_grad():
-        #     pos_logits_ref = self.model_ref(**chosen_text).logits
-        #     neg_logits_ref = self.model_ref(**rejected_text).logits
+        with torch.no_grad():
+            pos_logits_ref = self.model_ref(**chosen_text).logits
+            neg_logits_ref = self.model_ref(**rejected_text).logits
 
-        # pos_logprob_ref = F.log_softmax(pos_logits_ref, dim=-1)
-        # neg_logprob_ref = F.log_softmax(neg_logits_ref, dim=-1)
+            # try with logits as ref first
+            pos_logprob_ref = F.log_softmax(pos_logits_ref, dim=-1)
+            neg_logprob_ref = F.log_softmax(neg_logits_ref, dim=-1)
 
-        # pos_logprob_ref = torch.gather(pos_logprob_ref, 2, labels_chosen.unsqueeze(-1))
-        # neg_logprob_ref = torch.gather(
-        #     neg_logprob_ref, 2, labels_rejected.unsqueeze(-1)
-        # )
-        # ref_logratios = pos_logprob_ref.squeeze(-1).sum(-1) - neg_logprob_ref.squeeze(
-        #     -1
-        # ).sum(-1)
+            pos_logprob_ref = torch.gather(
+                pos_logprob_ref, 2, labels_chosen.unsqueeze(-1)
+            )
+            neg_logprob_ref = torch.gather(
+                neg_logprob_ref, 2, labels_rejected.unsqueeze(-1)
+            )
+
+            # pos_logprob_ref = F.log_softmax(pos_logits_ref, dim=-1)
+            # neg_logprob_ref = F.log_softmax(neg_logits_ref, dim=-1)
+
+            # pos_logprob_ref = torch.gather(pos_logprob_ref, 2, labels_chosen.unsqueeze(-1))
+            # neg_logprob_ref = torch.gather(
+            #     neg_logprob_ref, 2, labels_rejected.unsqueeze(-1)
+            # )
+            ref_logratios = pos_logprob_ref.squeeze(-1).sum(
+                -1
+            ) - neg_logprob_ref.squeeze(-1).sum(-1)
 
         # compute loss and reward
         pi_logratios = pos_logprob.squeeze(-1).sum(-1) - neg_logprob.squeeze(-1).sum(-1)
 
-        ref_logratios = 0
-
         loss = -F.logsigmoid(self.beta * (pi_logratios - ref_logratios))
         loss = loss.mean()
 
-        chosen_rewards = self.beta * (pos_logprob.squeeze(-1).sum(-1)).detach()
-        rejected_rewards = self.beta * (neg_logprob.squeeze(-1).sum(-1)).detach()
+        chosen_rewards = (
+            self.beta
+            * (
+                pos_logprob.squeeze(-1).sum(-1) - pos_logprob_ref.squeeze(-1).sum(-1)
+            ).detach()
+        )
+        rejected_rewards = (
+            self.beta
+            * (
+                neg_logprob.squeeze(-1).sum(-1) - neg_logprob_ref.squeeze(-1).sum(-1)
+            ).detach()
+        )
 
         # log the chosen and rejected rewards
         # log only when step is a multiple of 100
@@ -263,7 +299,7 @@ training_args = TrainingArguments(
     save_steps=10_000,
     save_total_limit=2,
     prediction_loss_only=True,
-    logging_dir="./hh-rlhf/logs_6",
+    logging_dir="./hh-rlhf/logs_7",
     dataloader_num_workers=4,
     run_name="hh-rlhf_3",
     logging_steps=100,
@@ -282,3 +318,6 @@ dpo_trainer = DPOTrainer(
 
 # we can now train the model
 dpo_trainer.train()
+
+# save the model
+dpo_trainer.save_model("./hh-rlhf/model_3")
