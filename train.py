@@ -43,6 +43,7 @@ model = AutoModelForCausalLM.from_pretrained(
     load_in_8bit=True,
     device_map={"": 0},
     trust_remote_code=True,
+    use_cache=False,
 )
 
 bnb_config = BitsAndBytesConfig(
@@ -58,6 +59,7 @@ model_ref = AutoModelForCausalLM.from_pretrained(
     quantization_config=bnb_config,
     device_map={"": 0},
     trust_remote_code=True,
+    use_cache=False,
 )
 
 model_ref.eval()
@@ -111,7 +113,17 @@ def compute_input_ids(list_sample_tokenized):
     chosen_attention_masks = [sample["attention_mask"] for sample in tokenized_pad]
     chosen_attention_masks = torch.tensor(chosen_attention_masks)
 
-    return tokenized_pad_id, chosen_attention_masks
+    # now we can also compute the "loss mask" where we look for the last >>ANSWER<< token
+    # in the input_ids vectors and mask everything that is before
+    loss_mask = torch.zeros_like(tokenized_pad_id)
+    all_answer_token = tokenized_pad_id == tokenizer.convert_tokens_to_ids(">>ANSWER<<")
+
+    for i in range(len(all_answer_token)):
+        if all_answer_token[i].sum() > 0:
+            last_answer_token = all_answer_token[i].nonzero()[-1].item()
+            loss_mask[i, : last_answer_token + 1] = 1
+
+    return tokenized_pad_id, chosen_attention_masks, loss_mask
 
 
 def collate_fn(list_of_samples):
@@ -141,20 +153,28 @@ def collate_fn(list_of_samples):
     ]
 
     # we compute the input_ids and attention_masks for the chosen text
-    chosen_input_ids, chosen_attention_masks = compute_input_ids(chosen_tokenized)
+    chosen_input_ids, chosen_attention_masks, chosen_loss_mask = compute_input_ids(
+        chosen_tokenized
+    )
 
     # we compute the input_ids and attention_masks for the rejected text
-    rejected_input_ids, rejected_attention_masks = compute_input_ids(rejected_tokenized)
+    (
+        rejected_input_ids,
+        rejected_attention_masks,
+        rejected_loss_mask,
+    ) = compute_input_ids(rejected_tokenized)
 
     # we create a new dict with the input_ids
     chosen_input_ids = {
         "input_ids": chosen_input_ids,
         "attention_mask": chosen_attention_masks,
+        "loss_mask": 1 - chosen_loss_mask,
     }
 
     rejected_input_ids = {
         "input_ids": rejected_input_ids,
         "attention_mask": rejected_attention_masks,
+        "loss_mask": 1 - rejected_loss_mask,
     }
 
     # we create a new dict with the tokenized text
@@ -178,8 +198,9 @@ class DPOTrainer(Trainer):
 
         # self.model_ref = model_ref
         # self.model_ref.eval()
-        # self.device_ref = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device_ref = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.model_ref.to(self.device_ref)
+        # self.model_ref.eval()
 
     # we need to define the compute_loss function
     def compute_loss(self, model, inputs, return_outputs=False):
@@ -194,6 +215,11 @@ class DPOTrainer(Trainer):
         # we get the chosen and rejected text
         chosen_text = inputs["chosen"]
         rejected_text = inputs["rejected"]
+
+        # for chosen_text and rejected_text we need to pop the loss_mask
+        # because we don't want to pass it to the model
+        chosen_loss_mask = chosen_text.pop("loss_mask")
+        rejected_loss_mask = rejected_text.pop("loss_mask")
 
         # labels chosen is just the chosen text shifted by one
         labels_chosen = torch.zeros_like(chosen_text["input_ids"]).long()
@@ -299,7 +325,7 @@ training_args = TrainingArguments(
     save_steps=10_000,
     save_total_limit=2,
     prediction_loss_only=True,
-    logging_dir="./hh-rlhf/logs_7",
+    logging_dir="./hh-rlhf/logs_8",
     dataloader_num_workers=4,
     run_name="hh-rlhf_3",
     logging_steps=100,
@@ -307,7 +333,6 @@ training_args = TrainingArguments(
 )
 
 # training_args.set_logging(strategy="steps", steps=100, report_to="tensorboard")
-
 dpo_trainer = DPOTrainer(
     model=model,
     args=training_args,
