@@ -36,21 +36,21 @@ if tokenizer.pad_token is None:
 # we have to create a custom collate function
 max_length = 512
 
-# we load the model
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    cache_dir="./cache_models",
-    load_in_8bit=True,
-    device_map={"": 0},
-    trust_remote_code=True,
-    use_cache=False,
-)
-
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_use_double_quant=True,
     bnb_4bit_quant_type="nf4",
     bnb_4bit_compute_dtype=torch.bfloat16,
+)
+
+# we load the model
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    cache_dir="./cache_models_4b",
+    quantization_config=bnb_config,
+    device_map={"": 0},
+    trust_remote_code=True,
+    use_cache=False,
 )
 
 model_ref = AutoModelForCausalLM.from_pretrained(
@@ -61,6 +61,15 @@ model_ref = AutoModelForCausalLM.from_pretrained(
     trust_remote_code=True,
     use_cache=False,
 )
+
+# model_ref = AutoModelForCausalLM.from_pretrained(
+#     model_name,
+#     cache_dir="./cache_models_4b",
+#     load_in_8bit=True,
+#     device_map={"": 0},
+#     trust_remote_code=True,
+#     use_cache=False,
+# )
 
 model_ref.eval()
 # model_ref = 0
@@ -190,7 +199,7 @@ class DPOTrainer(Trainer):
     Class to train the model with DPO (Direct Preference Optimization)
     """
 
-    beta = 0.5
+    beta = 0.1
 
     def __init__(self, **kwargs):
         self.model_ref = kwargs.pop("model_ref")
@@ -203,6 +212,7 @@ class DPOTrainer(Trainer):
         # self.model_ref.eval()
 
         self.loss_mask = True
+        
 
     # we need to define the compute_loss function
     def compute_loss(self, model, inputs, return_outputs=False):
@@ -266,8 +276,8 @@ class DPOTrainer(Trainer):
             # )
 
         if self.loss_mask:
-            pos_logprob_ref = pos_logprob_ref * chosen_loss_mask.unsqueeze(-1)
-            neg_logprob_ref = neg_logprob_ref * rejected_loss_mask.unsqueeze(-1)
+            pos_logprob_ref = pos_logprob_ref * chosen_loss_mask.unsqueeze(-1).detach()
+            neg_logprob_ref = neg_logprob_ref * rejected_loss_mask.unsqueeze(-1).detach()
 
             pos_logprob = pos_logprob * chosen_loss_mask.unsqueeze(-1)
             neg_logprob = neg_logprob * rejected_loss_mask.unsqueeze(-1)
@@ -331,16 +341,18 @@ training_args = TrainingArguments(
     output_dir="./hh-rlhf",
     overwrite_output_dir=True,
     num_train_epochs=1,
-    per_device_train_batch_size=1,
+    per_device_train_batch_size=2,
     save_steps=10_000,
     save_total_limit=2,
     prediction_loss_only=True,
-    logging_dir="./hh-rlhf/logs_9",
+    logging_dir="./hh-rlhf/logs_17",
     dataloader_num_workers=4,
     run_name="hh-rlhf_3",
     logging_steps=100,
-    learning_rate=5e-6,
     bf16=True,
+    logging_first_step=True,
+    warmup_steps=200,
+    gradient_accumulation_steps=4,
 )
 
 # training_args.set_logging(strategy="steps", steps=100, report_to="tensorboard")
