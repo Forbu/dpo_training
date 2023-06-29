@@ -2,7 +2,6 @@
 Script for a simple training loop for a transformer model.
 """
 
-import datasets
 from datasets import load_dataset
 
 # we want to use the pytorch dataloader
@@ -21,7 +20,7 @@ from peft import get_peft_config, get_peft_model, LoraConfig, TaskType
 from transformers import BitsAndBytesConfig
 
 dataset_name = "Anthropic/hh-rlhf"
-model_name = "tiiuae/falcon-7b-instruct"
+model_name = "OpenAssistant/falcon-7b-sft-mix-2000"
 
 dataset = load_dataset(dataset_name, cache_dir="./cache_data")
 
@@ -122,10 +121,10 @@ def compute_input_ids(list_sample_tokenized):
     chosen_attention_masks = [sample["attention_mask"] for sample in tokenized_pad]
     chosen_attention_masks = torch.tensor(chosen_attention_masks)
 
-    # now we can also compute the "loss mask" where we look for the last >>ANSWER<< token
+    # now we can also compute the "loss mask" where we look for the last <|assistant|> token
     # in the input_ids vectors and mask everything that is before
     loss_mask = torch.zeros_like(tokenized_pad_id)
-    all_answer_token = tokenized_pad_id == tokenizer.convert_tokens_to_ids(">>ANSWER<<")
+    all_answer_token = tokenized_pad_id == tokenizer.convert_tokens_to_ids("<|assistant|>")
 
     for i in range(len(all_answer_token)):
         if all_answer_token[i].sum() > 0:
@@ -143,13 +142,13 @@ def collate_fn(list_of_samples):
         - "rejected" : the rejected text
     """
 
-    # for every element replace Human: with >>QUESTION<<
-    # and replace Assistant: with >>ANSWER<<
+    # for every element replace Human: with <|prompter|>
+    # and replace Assistant: with <|assistant|>
     for sample in list_of_samples:
-        sample["chosen"] = sample["chosen"].replace("Human:", ">>QUESTION<<")
-        sample["chosen"] = sample["chosen"].replace("Assistant:", ">>ANSWER<<")
-        sample["rejected"] = sample["rejected"].replace("Human:", ">>QUESTION<<")
-        sample["rejected"] = sample["rejected"].replace("Assistant:", ">>ANSWER<<")
+        sample["chosen"] = sample["chosen"].replace("Human:", "<|prompter|>")
+        sample["chosen"] = sample["chosen"].replace("Assistant:", "<|assistant|>")
+        sample["rejected"] = sample["rejected"].replace("Human:", "<|prompter|>")
+        sample["rejected"] = sample["rejected"].replace("Assistant:", "<|assistant|>")
 
     # we tokenize the chosen and rejected text for every sample
     chosen_tokenized = [
@@ -351,7 +350,7 @@ training_args = TrainingArguments(
     logging_steps=100,
     bf16=True,
     logging_first_step=True,
-    warmup_steps=200,
+    warmup_steps=400,
     gradient_accumulation_steps=4,
 )
 
